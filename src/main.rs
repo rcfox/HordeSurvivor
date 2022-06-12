@@ -6,6 +6,7 @@ use rand::Rng;
 
 const PLAYER_COLOR: Color = Color::rgb(0.0, 0.0, 1.0);
 const ENEMY_COLOR: Color = Color::rgb(1.0, 0.0, 0.0);
+const BULLET_COLOR: Color = Color::rgb(1.0, 1.0, 1.0);
 
 fn main() {
     App::new()
@@ -24,7 +25,30 @@ struct Player;
 struct Enemy;
 
 #[derive(Component)]
+struct PreventOverlap;
+
+#[derive(Component)]
 struct Speed(f32, f32);
+
+#[derive(Component)]
+struct Damage(i32);
+
+#[derive(Component)]
+struct ShootBullet {
+    cooldown: Timer,
+    damage: i32,
+    size: f32,
+    speed: f32,
+}
+
+#[derive(Bundle)]
+struct BulletBundle {
+    speed: Speed,
+    damage: Damage,
+
+    #[bundle]
+    sprite: SpriteBundle,
+}
 
 // spawn player system
 fn setup(mut commands: Commands) {
@@ -45,6 +69,13 @@ fn setup(mut commands: Commands) {
             ..default()
         })
         .insert(Speed(0.0, 0.0))
+        .insert(ShootBullet {
+            cooldown: Timer::new(std::time::Duration::from_millis(300), true),
+            damage: 1,
+            size: 3.0,
+            speed: 3.0,
+        })
+        .insert(PreventOverlap)
         .insert(Player);
 
     let mut rng = rand::thread_rng();
@@ -67,6 +98,7 @@ fn setup(mut commands: Commands) {
                 ..default()
             })
             .insert(Speed(0.0, 0.0))
+            .insert(PreventOverlap)
             .insert(Enemy);
     }
 }
@@ -112,8 +144,8 @@ fn move_things(mut query: Query<(&mut Transform, &Speed)>) {
 }
 
 fn check_collisions(
-    mut collider: Query<(Entity, &mut Speed, &Transform)>,
-    obstacles: Query<(Entity, &Transform)>,
+    mut collider: Query<(Entity, &mut Speed, &Transform), With<PreventOverlap>>,
+    obstacles: Query<(Entity, &Transform), With<PreventOverlap>>,
 ) {
     for (collider_ent, mut speed, collider) in collider.iter_mut() {
         for (obstacle_ent, obstacle) in obstacles.iter() {
@@ -144,6 +176,51 @@ fn check_collisions(
     }
 }
 
+fn shoot_bullet(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(&mut ShootBullet, &Transform)>,
+    targets: Query<&Transform, With<Enemy>>,
+) {
+    let dt = time.delta();
+    for (mut shoot, transform) in query.iter_mut() {
+        shoot.cooldown.tick(dt);
+
+        if shoot.cooldown.finished() {
+            let m = targets.iter().map(|target_transform| {
+                (
+                    target_transform
+                        .translation
+                        .distance_squared(transform.translation),
+                    target_transform,
+                )
+            });
+            let target = m.min_by(|a, b| a.0.partial_cmp(&b.0).expect("Tried to compare a NaN"));
+            if let Some(target) = target {
+                let direction = (target.1.translation - transform.translation).normalize_or_zero();
+                let dx = direction.x * shoot.speed;
+                let dy = direction.y * shoot.speed;
+                commands.spawn_bundle(BulletBundle {
+                    damage: Damage(shoot.damage),
+                    speed: Speed(dx, dy),
+                    sprite: SpriteBundle {
+                        sprite: Sprite {
+                            color: BULLET_COLOR,
+                            ..default()
+                        },
+                        transform: Transform {
+                            scale: Vec3::new(shoot.size, shoot.size, 1.0),
+                            translation: transform.translation,
+                            ..default()
+                        },
+                        ..default()
+                    },
+                });
+            }
+        }
+    }
+}
+
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(WindowDescriptor {
@@ -158,6 +235,7 @@ impl Plugin for GamePlugin {
         .add_system(check_collisions.after(enemy_ai))
         .add_system(move_things.after(check_collisions))
         .add_system(handle_input.before(move_things))
+        .add_system(shoot_bullet.before(move_things))
         .add_system(bevy::input::system::exit_on_esc_system);
     }
 }
