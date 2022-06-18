@@ -34,7 +34,10 @@ struct Enemy;
 struct PreventOverlap;
 
 #[derive(Component)]
-struct Speed(f32, f32);
+struct Velocity {
+    speed: f32,
+    direction: Vec3,
+}
 
 #[derive(Component)]
 struct Health {
@@ -55,7 +58,7 @@ struct ShootBullet {
 
 #[derive(Bundle)]
 struct BulletBundle {
-    speed: Speed,
+    speed: Velocity,
     damage: Damage,
 
     #[bundle]
@@ -83,7 +86,10 @@ fn spawn_enemies(mut commands: Commands, num: usize) {
                 ..default()
             })
             .insert(Health { max: 1, current: 1 })
-            .insert(Speed(0.0, 0.0))
+            .insert(Velocity {
+                speed: 60.0,
+                direction: Vec3::ZERO,
+            })
             .insert(PreventOverlap)
             .insert(Enemy);
     }
@@ -125,12 +131,15 @@ fn setup(mut commands: Commands) {
             },
             ..default()
         })
-        .insert(Speed(0.0, 0.0))
+        .insert(Velocity {
+            speed: 80.0,
+            direction: Vec3::ZERO,
+        })
         .insert(ShootBullet {
             cooldown: Timer::new(std::time::Duration::from_millis(300), true),
             damage: 1,
             size: 3.0,
-            speed: 3.0,
+            speed: 200.0,
         })
         .insert(PreventOverlap)
         .insert(Player);
@@ -140,58 +149,57 @@ fn setup(mut commands: Commands) {
 
 fn handle_input(
     keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<&mut Transform, With<Player>>,
+    mut query: Query<&mut Velocity, With<Player>>,
 ) {
-    let mut player = query.single_mut();
+    let mut velocity = query.single_mut();
+
+    velocity.direction.x = 0.0;
+    velocity.direction.y = 0.0;
 
     if keyboard_input.pressed(KeyCode::Left) {
-        player.translation.x -= 2.0;
+        velocity.direction.x = -1.0;
     }
     if keyboard_input.pressed(KeyCode::Right) {
-        player.translation.x += 2.0;
+        velocity.direction.x = 1.0;
     }
     if keyboard_input.pressed(KeyCode::Up) {
-        player.translation.y += 2.0;
+        velocity.direction.y = 1.0;
     }
     if keyboard_input.pressed(KeyCode::Down) {
-        player.translation.y -= 2.0;
+        velocity.direction.y = -1.0;
     }
+
+    velocity.direction = velocity.direction.normalize_or_zero();
 }
 
 fn enemy_ai(
-    mut query: Query<(&mut Speed, &Transform), With<Enemy>>,
+    mut query: Query<(&mut Velocity, &Transform), With<Enemy>>,
     player_query: Query<&Transform, With<Player>>,
 ) {
     let player = player_query.single();
-    for (mut speed, transform) in query.iter_mut() {
-        let dx = player.translation.x - transform.translation.x;
-        let dy = player.translation.y - transform.translation.y;
-        speed.0 = dx.clamp(-0.5, 0.5);
-        speed.1 = dy.clamp(-0.5, 0.5);
+    for (mut velocity, transform) in query.iter_mut() {
+        velocity.direction = (player.translation - transform.translation).normalize_or_zero();
     }
 }
 
-fn move_things(mut query: Query<(&mut Transform, &Speed)>) {
-    for (mut transform, speed) in query.iter_mut() {
-        transform.translation.x += speed.0;
-        transform.translation.y += speed.1;
+fn move_things(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity)>) {
+    for (mut transform, velocity) in query.iter_mut() {
+        transform.translation += velocity.speed * velocity.direction * time.delta_seconds();
     }
 }
 
 fn check_collisions(
-    mut collider: Query<(Entity, &mut Speed, &Transform), With<PreventOverlap>>,
+    time: Res<Time>,
+    mut collider: Query<(Entity, &mut Velocity, &Transform), With<PreventOverlap>>,
     obstacles: Query<(Entity, &Transform), With<PreventOverlap>>,
 ) {
-    for (collider_ent, mut speed, collider) in collider.iter_mut() {
+    for (collider_ent, mut velocity, collider) in collider.iter_mut() {
         for (obstacle_ent, obstacle) in obstacles.iter() {
             if obstacle_ent == collider_ent {
                 continue;
             }
-            let new_pos = collider.translation + Vec3::new(speed.0, speed.1, 0.0);
-            let dist = new_pos.distance_squared(obstacle.translation);
-            if dist > 400.0 {
-                continue;
-            }
+            let new_pos =
+                collider.translation + velocity.speed * velocity.direction * time.delta_seconds();
             let collision = collide(
                 new_pos,
                 collider.scale.truncate(),
@@ -200,11 +208,38 @@ fn check_collisions(
             );
             if let Some(collision) = collision {
                 match collision {
-                    Collision::Left => speed.0 = if speed.0 > 0.0 { 0.0 } else { speed.0 },
-                    Collision::Right => speed.0 = if speed.0 < 0.0 { 0.0 } else { speed.0 },
-                    Collision::Top => speed.1 = if speed.1 < 0.0 { 0.0 } else { speed.1 },
-                    Collision::Bottom => speed.1 = if speed.1 > 0.0 { 0.0 } else { speed.1 },
-                    _ => {}
+                    Collision::Left => {
+                        velocity.direction.x = if velocity.direction.x > 0.0 {
+                            0.0
+                        } else {
+                            velocity.direction.x
+                        }
+                    }
+                    Collision::Right => {
+                        velocity.direction.x = if velocity.direction.x < 0.0 {
+                            0.0
+                        } else {
+                            velocity.direction.x
+                        }
+                    }
+                    Collision::Top => {
+                        velocity.direction.y = if velocity.direction.y < 0.0 {
+                            0.0
+                        } else {
+                            velocity.direction.y
+                        }
+                    }
+                    Collision::Bottom => {
+                        velocity.direction.y = if velocity.direction.y > 0.0 {
+                            0.0
+                        } else {
+                            velocity.direction.y
+                        }
+                    }
+                    Collision::Inside => {
+                        velocity.direction.x = 0.0;
+                        velocity.direction.y = 0.0;
+                    }
                 }
             }
         }
@@ -266,11 +301,12 @@ fn shoot_bullet(
             let target = m.min_by(|a, b| a.0.partial_cmp(&b.0).expect("Tried to compare a NaN"));
             if let Some(target) = target {
                 let direction = (target.1.translation - transform.translation).normalize_or_zero();
-                let dx = direction.x * shoot.speed;
-                let dy = direction.y * shoot.speed;
                 commands.spawn_bundle(BulletBundle {
                     damage: Damage(shoot.damage),
-                    speed: Speed(dx, dy),
+                    speed: Velocity {
+                        speed: shoot.speed,
+                        direction,
+                    },
                     sprite: SpriteBundle {
                         sprite: Sprite {
                             color: BULLET_COLOR,
