@@ -20,7 +20,6 @@ pub struct GamePlugin;
 pub struct CollisionEvent {
     collider: Entity,
     obstacle: Entity,
-    side: Collision,
 }
 
 pub struct DeathEvent {
@@ -262,11 +261,7 @@ fn precheck_collisions(
                         collider_velocity.direction.y = 0.0;
                     }
                 }
-                collision_events.send(CollisionEvent {
-                    collider,
-                    obstacle,
-                    side,
-                });
+                collision_events.send(CollisionEvent { collider, obstacle });
             }
         }
     }
@@ -288,12 +283,8 @@ fn check_collisions(
                 obstacle_transform.translation,
                 obstacle_transform.scale.truncate(),
             );
-            if let Some(side) = collision {
-                events.send(CollisionEvent {
-                    collider,
-                    obstacle,
-                    side,
-                });
+            if collision.is_some() {
+                events.send(CollisionEvent { collider, obstacle });
             }
         }
     }
