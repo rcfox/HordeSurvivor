@@ -351,7 +351,7 @@ fn upgrade_player_bouncer(
     players: Query<(Entity, &Experience), (With<Player>, Without<ShootBouncer>)>,
 ) {
     for (entity, experience) in players.iter() {
-        if experience.amount > 100 {
+        if experience.amount >= 100 {
             commands.entity(entity).insert(ShootBouncer {
                 cooldown: Timer::new(std::time::Duration::from_millis(600), true),
                 damage: 1,
@@ -368,7 +368,7 @@ fn upgrade_player_attraction(
     players: Query<(Entity, &Experience), (With<Player>, Without<Attraction>)>,
 ) {
     for (entity, experience) in players.iter() {
-        if experience.amount > 10 {
+        if experience.amount >= 10 {
             commands.entity(entity).insert(Attraction {
                 radius: 50.0,
                 force: 100.0,
