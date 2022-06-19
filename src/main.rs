@@ -160,6 +160,9 @@ fn spawn_exp_drop(commands: &mut Commands, translation: Vec3, value: u32) {
             speed: 0.0,
             direction: Vec3::ZERO,
         })
+        .insert(Lifetime {
+            timer: Timer::new(std::time::Duration::from_secs(30), false),
+        })
         .insert(Experience { amount: value })
         .insert(Attractable)
         .insert(Pickup);
