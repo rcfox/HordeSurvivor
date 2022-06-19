@@ -311,10 +311,6 @@ fn setup(mut commands: Commands) {
         .insert(InvincibilityWindow {
             damage_sources: HashMap::new(),
         })
-        .insert(Attraction {
-            radius: 50.0,
-            force: 100.0,
-        })
         .insert(PreventOverlap)
         .insert(Solid)
         .insert(Player);
@@ -359,6 +355,20 @@ fn upgrade_player_bouncer(
                 size: 5.0,
                 speed: 500.0,
                 lifetime: std::time::Duration::from_secs(4),
+            });
+        }
+    }
+}
+
+fn upgrade_player_attraction(
+    mut commands: Commands,
+    players: Query<(Entity, &Experience), (With<Player>, Without<Attraction>)>,
+) {
+    for (entity, experience) in players.iter() {
+        if experience.amount > 10 {
+            commands.entity(entity).insert(Attraction {
+                radius: 50.0,
+                force: 100.0,
             });
         }
     }
@@ -809,6 +819,7 @@ impl Plugin for GamePlugin {
         .add_system(enemy_ai)
         .add_system(check_lifetimes)
         .add_system(upgrade_player_bouncer)
+        .add_system(upgrade_player_attraction)
         .add_system(attract_things)
         .add_system(precheck_collisions.after(enemy_ai))
         .add_system(move_things.after(precheck_collisions))
