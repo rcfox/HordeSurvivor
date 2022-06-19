@@ -62,7 +62,6 @@ struct Health {
 #[derive(Component)]
 struct Damage {
     damage: u32,
-    cooldown: Timer,
 }
 
 #[derive(Component)]
@@ -109,10 +108,7 @@ fn spawn_enemies(mut commands: Commands, num: usize) {
             })
             .insert(Name(String::from("Enemy")))
             .insert(Health { max: 1, current: 1 })
-            .insert(Damage {
-                damage: 1,
-                cooldown: Timer::new(std::time::Duration::from_millis(1000), true),
-            })
+            .insert(Damage { damage: 1 })
             .insert(Velocity {
                 speed: 60.0,
                 direction: Vec3::ZERO,
@@ -312,20 +308,15 @@ fn check_collisions(
 }
 
 fn collision_damage(
-    time: Res<Time>,
     mut collision_events: EventReader<CollisionEvent>,
     mut death_events: EventWriter<DeathEvent>,
-    mut damagers: Query<(&mut Damage, &Owner)>,
+    damagers: Query<(&Damage, &Owner)>,
     mut damagees: Query<(Entity, &mut Health, &Name)>,
 ) {
     for event in collision_events.iter() {
-        if let Ok((mut damage, owner)) = damagers.get_mut(event.collider) {
-            if let Ok((entity, mut health, name)) = damagees.get_mut(event.obstacle) {
+        if let Ok((damage, owner)) = damagers.get(event.collider) {
+            if let Ok((entity, mut health, _name)) = damagees.get_mut(event.obstacle) {
                 if owner.0 == Some(entity) {
-                    continue;
-                }
-                damage.cooldown.tick(time.delta());
-                if !damage.cooldown.finished() {
                     continue;
                 }
                 if health.current > damage.damage {
@@ -336,7 +327,7 @@ fn collision_damage(
                 if health.current > health.max {
                     health.current = health.max;
                 }
-                println!("{} health: {}", name.0, health.current);
+                //println!("{} health: {}", name.0, health.current);
                 if health.current == 0 {
                     death_events.send(DeathEvent { entity });
                 }
@@ -395,7 +386,6 @@ fn shoot_bullet(
                 commands.spawn_bundle(BulletBundle {
                     damage: Damage {
                         damage: shoot.damage,
-                        cooldown: Timer::new(std::time::Duration::from_millis(1000), true),
                     },
                     speed: Velocity {
                         speed: shoot.speed,
