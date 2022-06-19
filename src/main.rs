@@ -423,6 +423,7 @@ fn shoot_bullet(
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
+        static CLEANUP: &str = "CLEANUP_STAGE";
         app.insert_resource(WindowDescriptor {
             title: "Platformer!".to_string(),
             width: 640.0,
@@ -436,6 +437,7 @@ impl Plugin for GamePlugin {
         })
         .add_event::<CollisionEvent>()
         .add_event::<DeathEvent>()
+        .add_stage_after(CoreStage::Update, CLEANUP, SystemStage::single_threaded())
         .add_startup_system(setup)
         .add_system(enemy_ai)
         .add_system(precheck_collisions.after(enemy_ai))
@@ -445,7 +447,7 @@ impl Plugin for GamePlugin {
         .add_system(check_collisions.after(move_things))
         .add_system(collision_damage.after(check_collisions))
         .add_system(bullet_collision.after(check_collisions))
-        .add_system(handle_death.after(bullet_collision))
+        .add_system_to_stage(CLEANUP, handle_death)
         .add_system(spawn_new_enemies)
         .add_system(bevy::input::system::exit_on_esc_system);
     }
