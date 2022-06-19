@@ -17,6 +17,16 @@ fn main() {
 
 pub struct GamePlugin;
 
+pub struct CollisionEvent {
+    collider: Entity,
+    obstacle: Entity,
+    side: Collision,
+}
+
+pub struct DeathEvent {
+    entity: Entity,
+}
+
 #[derive(Component)]
 struct EnemySpawnConfig {
     timer: Timer,
@@ -56,8 +66,12 @@ struct ShootBullet {
     speed: f32,
 }
 
+#[derive(Component)]
+struct Bullet;
+
 #[derive(Bundle)]
 struct BulletBundle {
+    bullet: Bullet,
     speed: Velocity,
     damage: Damage,
 
@@ -188,93 +202,142 @@ fn move_things(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity)>) {
     }
 }
 
-fn check_collisions(
+fn precheck_collisions(
+    mut collision_events: EventWriter<CollisionEvent>,
     time: Res<Time>,
-    mut collider: Query<(Entity, &mut Velocity, &Transform), With<PreventOverlap>>,
+    mut collider: Query<
+        (Entity, &mut Velocity, &Transform),
+        (
+            With<PreventOverlap>,
+            Or<(Changed<Transform>, Changed<Velocity>)>,
+        ),
+    >,
     obstacles: Query<(Entity, &Transform), With<PreventOverlap>>,
 ) {
-    for (collider_ent, mut velocity, collider) in collider.iter_mut() {
-        for (obstacle_ent, obstacle) in obstacles.iter() {
-            if obstacle_ent == collider_ent {
+    for (collider, mut collider_velocity, collider_transform) in collider.iter_mut() {
+        for (obstacle, obstacle_transform) in obstacles.iter() {
+            if obstacle == collider {
                 continue;
             }
-            let new_pos =
-                collider.translation + velocity.speed * velocity.direction * time.delta_seconds();
+            let new_pos = collider_transform.translation
+                + collider_velocity.speed * collider_velocity.direction * time.delta_seconds();
             let collision = collide(
                 new_pos,
-                collider.scale.truncate(),
-                obstacle.translation,
-                obstacle.scale.truncate(),
+                collider_transform.scale.truncate(),
+                obstacle_transform.translation,
+                obstacle_transform.scale.truncate(),
             );
-            if let Some(collision) = collision {
-                match collision {
+            if let Some(side) = collision {
+                match side {
                     Collision::Left => {
-                        velocity.direction.x = if velocity.direction.x > 0.0 {
+                        collider_velocity.direction.x = if collider_velocity.direction.x > 0.0 {
                             0.0
                         } else {
-                            velocity.direction.x
+                            collider_velocity.direction.x
                         }
                     }
                     Collision::Right => {
-                        velocity.direction.x = if velocity.direction.x < 0.0 {
+                        collider_velocity.direction.x = if collider_velocity.direction.x < 0.0 {
                             0.0
                         } else {
-                            velocity.direction.x
+                            collider_velocity.direction.x
                         }
                     }
                     Collision::Top => {
-                        velocity.direction.y = if velocity.direction.y < 0.0 {
+                        collider_velocity.direction.y = if collider_velocity.direction.y < 0.0 {
                             0.0
                         } else {
-                            velocity.direction.y
+                            collider_velocity.direction.y
                         }
                     }
                     Collision::Bottom => {
-                        velocity.direction.y = if velocity.direction.y > 0.0 {
+                        collider_velocity.direction.y = if collider_velocity.direction.y > 0.0 {
                             0.0
                         } else {
-                            velocity.direction.y
+                            collider_velocity.direction.y
                         }
                     }
                     Collision::Inside => {
-                        velocity.direction.x = 0.0;
-                        velocity.direction.y = 0.0;
+                        collider_velocity.direction.x = 0.0;
+                        collider_velocity.direction.y = 0.0;
                     }
+                }
+                collision_events.send(CollisionEvent {
+                    collider,
+                    obstacle,
+                    side,
+                });
+            }
+        }
+    }
+}
+
+fn check_collisions(
+    mut events: EventWriter<CollisionEvent>,
+    collider: Query<(Entity, &Transform), Changed<Transform>>,
+    obstacles: Query<(Entity, &Transform)>,
+) {
+    for (collider, collider_transform) in collider.iter() {
+        for (obstacle, obstacle_transform) in obstacles.iter() {
+            if obstacle == collider {
+                continue;
+            }
+            let collision = collide(
+                collider_transform.translation,
+                collider_transform.scale.truncate(),
+                obstacle_transform.translation,
+                obstacle_transform.scale.truncate(),
+            );
+            if let Some(side) = collision {
+                events.send(CollisionEvent {
+                    collider,
+                    obstacle,
+                    side,
+                });
+            }
+        }
+    }
+}
+
+fn collision_damage(
+    mut collision_events: EventReader<CollisionEvent>,
+    mut death_events: EventWriter<DeathEvent>,
+    damagers: Query<&Damage>,
+    mut damagees: Query<(Entity, &mut Health)>,
+) {
+    for event in collision_events.iter() {
+        if let Ok(damage) = damagers.get(event.collider) {
+            if let Ok((entity, mut health)) = damagees.get_mut(event.obstacle) {
+                health.current -= damage.0;
+                if health.current == 0 {
+                    death_events.send(DeathEvent { entity });
                 }
             }
         }
     }
 }
 
-fn check_bullet_collisions(
-    mut commands: Commands,
-    bullets: Query<(Entity, &Damage, &Transform)>,
-    mut targets: Query<(Entity, &mut Health, &Transform)>,
+fn bullet_collision(
+    mut collision_events: EventReader<CollisionEvent>,
+    mut death_events: EventWriter<DeathEvent>,
+    bullets: Query<Entity, With<Bullet>>,
+    obstacles: Query<Entity, (Without<Bullet>, Without<Player>)>,
 ) {
-    for (bullet, bullet_damage, bullet_transform) in bullets.iter() {
-        for (target, mut health, target_transform) in targets.iter_mut() {
-            if bullet == target {
-                continue;
+    for event in collision_events.iter() {
+        if let Ok(entity) = bullets.get(event.collider) {
+            if obstacles.get(event.obstacle).is_ok() {
+                death_events.send(DeathEvent { entity });
             }
-            let dist = bullet_transform
-                .translation
-                .distance_squared(target_transform.translation);
-            if dist > 400.0 {
-                continue;
-            }
-            let collision = collide(
-                bullet_transform.translation,
-                bullet_transform.scale.truncate(),
-                target_transform.translation,
-                target_transform.scale.truncate(),
-            );
-            if let Some(_collision) = collision {
-                health.current -= bullet_damage.0;
-                if health.current == 0 {
-                    commands.entity(target).despawn();
-                }
-                commands.entity(bullet).despawn();
-            }
+        }
+    }
+}
+
+fn handle_death(mut death_events: EventReader<DeathEvent>, mut commands: Commands) {
+    let mut handled: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    for event in death_events.iter() {
+        if !handled.contains(&event.entity) {
+            commands.entity(event.entity).despawn_recursive();
+            handled.insert(event.entity);
         }
     }
 }
@@ -319,6 +382,7 @@ fn shoot_bullet(
                         },
                         ..default()
                     },
+                    bullet: Bullet,
                 });
             }
         }
@@ -338,13 +402,18 @@ impl Plugin for GamePlugin {
             timer: Timer::new(std::time::Duration::from_secs(5), true),
             desired_amount: 150,
         })
+        .add_event::<CollisionEvent>()
+        .add_event::<DeathEvent>()
         .add_startup_system(setup)
         .add_system(enemy_ai)
-        .add_system(check_collisions.after(enemy_ai))
-        .add_system(move_things.after(check_collisions))
+        .add_system(precheck_collisions.after(enemy_ai))
+        .add_system(move_things.after(precheck_collisions))
         .add_system(handle_input.before(move_things))
         .add_system(shoot_bullet.before(move_things))
-        .add_system(check_bullet_collisions.before(move_things))
+        .add_system(check_collisions.after(move_things))
+        .add_system(collision_damage.after(check_collisions))
+        .add_system(bullet_collision.after(check_collisions))
+        .add_system(handle_death.after(bullet_collision))
         .add_system(spawn_new_enemies)
         .add_system(bevy::input::system::exit_on_esc_system);
     }
