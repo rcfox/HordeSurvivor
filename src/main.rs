@@ -43,6 +43,15 @@ struct Name(String);
 struct Player;
 
 #[derive(Component)]
+struct Attractable;
+
+#[derive(Component)]
+struct Attraction {
+    radius: f32,
+    force: f32,
+}
+
+#[derive(Component)]
 struct Experience {
     amount: u32,
 }
@@ -147,7 +156,12 @@ fn spawn_exp_drop(commands: &mut Commands, translation: Vec3, value: u32) {
             },
             ..default()
         })
+        .insert(Velocity {
+            speed: 0.0,
+            direction: Vec3::ZERO,
+        })
         .insert(Experience { amount: value })
+        .insert(Attractable)
         .insert(Pickup);
 }
 
@@ -297,6 +311,10 @@ fn setup(mut commands: Commands) {
         .insert(InvincibilityWindow {
             damage_sources: HashMap::new(),
         })
+        .insert(Attraction {
+            radius: 50.0,
+            force: 100.0,
+        })
         .insert(PreventOverlap)
         .insert(Solid)
         .insert(Player);
@@ -353,6 +371,26 @@ fn enemy_ai(
     for player in player_query.iter() {
         for (mut velocity, transform) in query.iter_mut() {
             velocity.direction = (player.translation - transform.translation).normalize_or_zero();
+        }
+    }
+}
+
+fn attract_things(
+    attractors: Query<(&Transform, &Attraction)>,
+    mut attractables: Query<(&mut Velocity, &Transform), With<Attractable>>,
+) {
+    for (mut attractable_velocity, attractable_transform) in attractables.iter_mut() {
+        for (attractor_transform, attractor_attraction) in attractors.iter() {
+            let radius_sq = f32::powi(attractor_attraction.radius, 2);
+            let dist_sq = attractor_transform
+                .translation
+                .distance_squared(attractable_transform.translation);
+            if dist_sq <= radius_sq {
+                attractable_velocity.direction = (attractor_transform.translation
+                    - attractable_transform.translation)
+                    .normalize_or_zero();
+                attractable_velocity.speed = attractor_attraction.force;
+            }
         }
     }
 }
@@ -771,6 +809,7 @@ impl Plugin for GamePlugin {
         .add_system(enemy_ai)
         .add_system(check_lifetimes)
         .add_system(upgrade_player_bouncer)
+        .add_system(attract_things)
         .add_system(precheck_collisions.after(enemy_ai))
         .add_system(move_things.after(precheck_collisions))
         .add_system(handle_input.before(move_things))
