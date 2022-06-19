@@ -184,34 +184,35 @@ fn handle_input(
     keyboard_input: Res<Input<KeyCode>>,
     mut query: Query<&mut Velocity, With<Player>>,
 ) {
-    let mut velocity = query.single_mut();
+    for mut velocity in query.iter_mut() {
+        velocity.direction.x = 0.0;
+        velocity.direction.y = 0.0;
 
-    velocity.direction.x = 0.0;
-    velocity.direction.y = 0.0;
+        if keyboard_input.pressed(KeyCode::Left) {
+            velocity.direction.x = -1.0;
+        }
+        if keyboard_input.pressed(KeyCode::Right) {
+            velocity.direction.x = 1.0;
+        }
+        if keyboard_input.pressed(KeyCode::Up) {
+            velocity.direction.y = 1.0;
+        }
+        if keyboard_input.pressed(KeyCode::Down) {
+            velocity.direction.y = -1.0;
+        }
 
-    if keyboard_input.pressed(KeyCode::Left) {
-        velocity.direction.x = -1.0;
+        velocity.direction = velocity.direction.normalize_or_zero();
     }
-    if keyboard_input.pressed(KeyCode::Right) {
-        velocity.direction.x = 1.0;
-    }
-    if keyboard_input.pressed(KeyCode::Up) {
-        velocity.direction.y = 1.0;
-    }
-    if keyboard_input.pressed(KeyCode::Down) {
-        velocity.direction.y = -1.0;
-    }
-
-    velocity.direction = velocity.direction.normalize_or_zero();
 }
 
 fn enemy_ai(
     mut query: Query<(&mut Velocity, &Transform), With<Enemy>>,
     player_query: Query<&Transform, With<Player>>,
 ) {
-    let player = player_query.single();
-    for (mut velocity, transform) in query.iter_mut() {
-        velocity.direction = (player.translation - transform.translation).normalize_or_zero();
+    for player in player_query.iter() {
+        for (mut velocity, transform) in query.iter_mut() {
+            velocity.direction = (player.translation - transform.translation).normalize_or_zero();
+        }
     }
 }
 
