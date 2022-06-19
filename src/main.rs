@@ -1,6 +1,7 @@
 use bevy::{
     prelude::*,
     sprite::collide_aabb::{collide, Collision},
+    utils::{HashMap, HashSet},
 };
 use rand::Rng;
 
@@ -91,6 +92,11 @@ struct DropExpOnDeath {
     amount: u32,
 }
 
+#[derive(Component)]
+struct InvincibilityWindow {
+    damage_sources: HashMap<Entity, Timer>,
+}
+
 #[derive(Bundle)]
 struct BulletBundle {
     bullet: Bullet,
@@ -151,6 +157,9 @@ fn spawn_enemies(mut commands: Commands, num: usize) {
             .insert(Owner(None))
             .insert(DropExpOnDeath { amount: 1 })
             .insert(Solid)
+            .insert(InvincibilityWindow {
+                damage_sources: HashMap::new(),
+            })
             .insert(Enemy);
     }
 }
@@ -258,6 +267,9 @@ fn setup(mut commands: Commands) {
             damage: 1,
             size: 3.0,
             speed: 200.0,
+        })
+        .insert(InvincibilityWindow {
+            damage_sources: HashMap::new(),
         })
         .insert(PreventOverlap)
         .insert(Solid)
@@ -400,16 +412,35 @@ fn check_collisions(
 }
 
 fn collision_damage(
+    time: Res<Time>,
     mut collision_events: EventReader<CollisionEvent>,
     mut death_events: EventWriter<DeathEvent>,
-    damagers: Query<(&Damage, &Owner)>,
-    mut damagees: Query<(Entity, &mut Health, &Name)>,
+    damagers: Query<(Entity, &Damage, &Owner)>,
+    mut damagees: Query<(Entity, &mut Health, &Name, &mut InvincibilityWindow)>,
 ) {
     for event in collision_events.iter() {
-        if let Ok((damage, owner)) = damagers.get(event.collider) {
-            if let Ok((entity, mut health, _name)) = damagees.get_mut(event.obstacle) {
+        if let Ok((damage_ent, damage, owner)) = damagers.get(event.collider) {
+            if let Ok((entity, mut health, _name, mut invinc_window)) =
+                damagees.get_mut(event.obstacle)
+            {
                 if owner.0 == Some(entity) {
                     continue;
+                }
+                match invinc_window.damage_sources.get_mut(&damage_ent) {
+                    Some(timer) => {
+                        timer.tick(time.delta());
+                        if !timer.finished() {
+                            continue;
+                        } else {
+                            invinc_window.damage_sources.remove(&damage_ent);
+                        }
+                    }
+                    None => {
+                        invinc_window.damage_sources.insert(
+                            damage_ent,
+                            Timer::new(std::time::Duration::from_millis(500), false),
+                        );
+                    }
                 }
                 if health.current > damage.damage {
                     health.current -= damage.damage;
@@ -467,7 +498,7 @@ fn handle_exp_drop_on_death(
     mut death_events: EventReader<DeathEvent>,
     query: Query<(&DropExpOnDeath, &Transform)>,
 ) {
-    let mut handled: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    let mut handled: HashSet<Entity> = HashSet::new();
     for event in death_events.iter() {
         if let Ok((drop_exp, transform)) = query.get(event.entity) {
             if !handled.contains(&event.entity) {
@@ -490,7 +521,7 @@ fn handle_health_change(
 }
 
 fn handle_death(mut death_events: EventReader<DeathEvent>, mut commands: Commands) {
-    let mut handled: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    let mut handled: HashSet<Entity> = HashSet::new();
     for event in death_events.iter() {
         if !handled.contains(&event.entity) {
             commands.entity(event.entity).despawn_recursive();
@@ -508,6 +539,17 @@ fn handle_player_death(
     for event in death_events.iter() {
         if query.get(event.entity).is_ok() {
             text.sections[1].value = format!("{}", 0);
+        }
+    }
+}
+
+fn cleanup_invincibility_windows(
+    mut death_events: EventReader<DeathEvent>,
+    mut invincibility_windows: Query<&mut InvincibilityWindow>,
+) {
+    for event in death_events.iter() {
+        for mut window in invincibility_windows.iter_mut() {
+            window.damage_sources.remove(&event.entity);
         }
     }
 }
@@ -594,6 +636,7 @@ impl Plugin for GamePlugin {
         .add_system_to_stage(CLEANUP, handle_death)
         .add_system_to_stage(CLEANUP, handle_player_death)
         .add_system_to_stage(CLEANUP, handle_exp_drop_on_death.before(handle_death))
+        .add_system_to_stage(CLEANUP, cleanup_invincibility_windows.after(handle_death))
         .add_system(spawn_new_enemies)
         .add_system(bevy::input::system::exit_on_esc_system);
     }
