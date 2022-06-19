@@ -173,6 +173,58 @@ fn spawn_new_enemies(
     }
 }
 
+fn setup_health_display(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn_bundle(TextBundle {
+        text: Text {
+            sections: vec![
+                TextSection {
+                    value: "Health: ".to_string(),
+                    style: TextStyle {
+                        font: asset_server.load("fonts/FiraMono-Medium.ttf"),
+                        font_size: 40.0,
+                        color: Color::rgb(1.0, 1.0, 1.0),
+                    },
+                },
+                TextSection {
+                    value: "".to_string(),
+                    style: TextStyle {
+                        font: asset_server.load("fonts/FiraMono-Medium.ttf"),
+                        font_size: 40.0,
+                        color: Color::rgb(1.0, 1.0, 1.0),
+                    },
+                },
+                TextSection {
+                    value: "  Score: ".to_string(),
+                    style: TextStyle {
+                        font: asset_server.load("fonts/FiraMono-Medium.ttf"),
+                        font_size: 40.0,
+                        color: Color::rgb(1.0, 1.0, 1.0),
+                    },
+                },
+                TextSection {
+                    value: "0".to_string(),
+                    style: TextStyle {
+                        font: asset_server.load("fonts/FiraMono-Medium.ttf"),
+                        font_size: 40.0,
+                        color: Color::rgb(1.0, 1.0, 1.0),
+                    },
+                },
+            ],
+            ..default()
+        },
+        style: Style {
+            position_type: PositionType::Absolute,
+            position: Rect {
+                top: Val::Px(5.0),
+                left: Val::Px(5.0),
+                ..default()
+            },
+            ..default()
+        },
+        ..default()
+    });
+}
+
 // spawn player system
 fn setup(mut commands: Commands) {
     // Cameras
@@ -395,11 +447,14 @@ fn exp_pickup_collision(
     mut death_events: EventWriter<DeathEvent>,
     mut player: Query<&mut Experience, (With<Player>, Without<Pickup>)>,
     pickups: Query<(Entity, &Experience), With<Pickup>>,
+    mut texts: Query<&mut Text>,
 ) {
+    let mut text = texts.single_mut();
     for event in collision_events.iter() {
         if let Ok((pickup, pickup_exp)) = pickups.get(event.obstacle) {
             if let Ok(mut player_exp) = player.get_mut(event.collider) {
                 player_exp.amount += pickup_exp.amount;
+                text.sections[3].value = format!("{}", player_exp.amount);
                 death_events.send(DeathEvent { entity: pickup });
             }
         }
@@ -419,6 +474,17 @@ fn handle_exp_drop_on_death(
                 handled.insert(event.entity);
             }
         }
+    }
+}
+
+fn handle_health_change(
+    mut texts: Query<&mut Text>,
+    players: Query<&Health, (With<Player>, Changed<Health>)>,
+) {
+    let mut text = texts.single_mut();
+
+    for health in players.iter() {
+        text.sections[1].value = format!("{}", health.current);
     }
 }
 
@@ -500,6 +566,8 @@ impl Plugin for GamePlugin {
         .add_event::<DeathEvent>()
         .add_stage_after(CoreStage::Update, CLEANUP, SystemStage::single_threaded())
         .add_startup_system(setup)
+        .add_startup_system(setup_health_display)
+        .add_system(handle_health_change)
         .add_system(enemy_ai)
         .add_system(precheck_collisions.after(enemy_ai))
         .add_system(move_things.after(precheck_collisions))
