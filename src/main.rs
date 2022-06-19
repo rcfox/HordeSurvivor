@@ -316,6 +316,7 @@ fn precheck_collisions(
         (
             With<PreventOverlap>,
             With<Solid>,
+            Without<Player>,
             Or<(Changed<Transform>, Changed<Velocity>)>,
         ),
     >,
