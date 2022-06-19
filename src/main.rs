@@ -48,6 +48,9 @@ struct Enemy;
 struct PreventOverlap;
 
 #[derive(Component)]
+struct Solid;
+
+#[derive(Component)]
 struct Velocity {
     speed: f32,
     direction: Vec3,
@@ -75,6 +78,11 @@ struct ShootBullet {
 #[derive(Component)]
 struct Bullet;
 
+#[derive(Component)]
+struct DropExpOnDeath {
+    amount: u32,
+}
+
 #[derive(Bundle)]
 struct BulletBundle {
     bullet: Bullet,
@@ -84,6 +92,21 @@ struct BulletBundle {
 
     #[bundle]
     sprite: SpriteBundle,
+}
+
+fn spawn_exp_drop(commands: &mut Commands, translation: Vec3) {
+    commands.spawn_bundle(SpriteBundle {
+        sprite: Sprite {
+            color: Color::rgb(0.0, 1.0, 0.0),
+            ..default()
+        },
+        transform: Transform {
+            translation,
+            scale: Vec3::new(3.0, 3.0, 1.0),
+            ..default()
+        },
+        ..default()
+    });
 }
 
 fn spawn_enemies(mut commands: Commands, num: usize) {
@@ -115,6 +138,8 @@ fn spawn_enemies(mut commands: Commands, num: usize) {
             })
             .insert(PreventOverlap)
             .insert(Owner(None))
+            .insert(DropExpOnDeath { amount: 1 })
+            .insert(Solid)
             .insert(Enemy);
     }
 }
@@ -171,6 +196,7 @@ fn setup(mut commands: Commands) {
             speed: 200.0,
         })
         .insert(PreventOverlap)
+        .insert(Solid)
         .insert(Player);
 
     //spawn_enemies(commands, 100);
@@ -225,10 +251,11 @@ fn precheck_collisions(
         (Entity, &mut Velocity, &Transform),
         (
             With<PreventOverlap>,
+            With<Solid>,
             Or<(Changed<Transform>, Changed<Velocity>)>,
         ),
     >,
-    obstacles: Query<(Entity, &Transform), With<PreventOverlap>>,
+    obstacles: Query<(Entity, &Transform), (With<PreventOverlap>, With<Solid>)>,
 ) {
     for (collider, mut collider_velocity, collider_transform) in collider.iter_mut() {
         for (obstacle, obstacle_transform) in obstacles.iter() {
@@ -340,12 +367,28 @@ fn bullet_collision(
     mut collision_events: EventReader<CollisionEvent>,
     mut death_events: EventWriter<DeathEvent>,
     bullets: Query<Entity, With<Bullet>>,
-    obstacles: Query<Entity, (Without<Bullet>, Without<Player>)>,
+    obstacles: Query<Entity, (With<Solid>, Without<Bullet>, Without<Player>)>,
 ) {
     for event in collision_events.iter() {
         if let Ok(entity) = bullets.get(event.collider) {
             if obstacles.get(event.obstacle).is_ok() {
                 death_events.send(DeathEvent { entity });
+            }
+        }
+    }
+}
+
+fn handle_exp_drop_on_death(
+    mut commands: Commands,
+    mut death_events: EventReader<DeathEvent>,
+    query: Query<(&DropExpOnDeath, &Transform)>,
+) {
+    let mut handled: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    for event in death_events.iter() {
+        if let Ok((_, transform)) = query.get(event.entity) {
+            if !handled.contains(&event.entity) {
+                spawn_exp_drop(&mut commands, transform.translation);
+                handled.insert(event.entity);
             }
         }
     }
@@ -438,6 +481,7 @@ impl Plugin for GamePlugin {
         .add_system(collision_damage.after(check_collisions))
         .add_system(bullet_collision.after(check_collisions))
         .add_system_to_stage(CLEANUP, handle_death)
+        .add_system_to_stage(CLEANUP, handle_exp_drop_on_death.before(handle_death))
         .add_system(spawn_new_enemies)
         .add_system(bevy::input::system::exit_on_esc_system);
     }
