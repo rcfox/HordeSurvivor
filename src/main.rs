@@ -498,6 +498,19 @@ fn handle_death(mut death_events: EventReader<DeathEvent>, mut commands: Command
     }
 }
 
+fn handle_player_death(
+    mut death_events: EventReader<DeathEvent>,
+    mut texts: Query<&mut Text>,
+    query: Query<Entity, With<Player>>,
+) {
+    let mut text = texts.single_mut();
+    for event in death_events.iter() {
+        if query.get(event.entity).is_ok() {
+            text.sections[1].value = format!("{}", 0);
+        }
+    }
+}
+
 fn shoot_bullet(
     mut commands: Commands,
     time: Res<Time>,
@@ -578,6 +591,7 @@ impl Plugin for GamePlugin {
         .add_system(bullet_collision.after(check_collisions))
         .add_system(exp_pickup_collision.after(check_collisions))
         .add_system_to_stage(CLEANUP, handle_death)
+        .add_system_to_stage(CLEANUP, handle_player_death)
         .add_system_to_stage(CLEANUP, handle_exp_drop_on_death.before(handle_death))
         .add_system(spawn_new_enemies)
         .add_system(bevy::input::system::exit_on_esc_system);
