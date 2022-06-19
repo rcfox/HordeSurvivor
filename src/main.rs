@@ -42,6 +42,11 @@ struct Name(String);
 struct Player;
 
 #[derive(Component)]
+struct Experience {
+    amount: u32,
+}
+
+#[derive(Component)]
 struct Enemy;
 
 #[derive(Component)]
@@ -79,6 +84,9 @@ struct ShootBullet {
 struct Bullet;
 
 #[derive(Component)]
+struct Pickup;
+
+#[derive(Component)]
 struct DropExpOnDeath {
     amount: u32,
 }
@@ -94,19 +102,22 @@ struct BulletBundle {
     sprite: SpriteBundle,
 }
 
-fn spawn_exp_drop(commands: &mut Commands, translation: Vec3) {
-    commands.spawn_bundle(SpriteBundle {
-        sprite: Sprite {
-            color: Color::rgb(0.0, 1.0, 0.0),
+fn spawn_exp_drop(commands: &mut Commands, translation: Vec3, value: u32) {
+    commands
+        .spawn_bundle(SpriteBundle {
+            sprite: Sprite {
+                color: Color::rgb(0.0, 1.0, 0.0),
+                ..default()
+            },
+            transform: Transform {
+                translation,
+                scale: Vec3::new(3.0, 3.0, 1.0),
+                ..default()
+            },
             ..default()
-        },
-        transform: Transform {
-            translation,
-            scale: Vec3::new(3.0, 3.0, 1.0),
-            ..default()
-        },
-        ..default()
-    });
+        })
+        .insert(Experience { amount: value })
+        .insert(Pickup);
 }
 
 fn spawn_enemies(mut commands: Commands, num: usize) {
@@ -185,6 +196,7 @@ fn setup(mut commands: Commands) {
             max: 100,
             current: 100,
         })
+        .insert(Experience { amount: 0 })
         .insert(Velocity {
             speed: 80.0,
             direction: Vec3::ZERO,
@@ -378,6 +390,22 @@ fn bullet_collision(
     }
 }
 
+fn exp_pickup_collision(
+    mut collision_events: EventReader<CollisionEvent>,
+    mut death_events: EventWriter<DeathEvent>,
+    mut player: Query<&mut Experience, (With<Player>, Without<Pickup>)>,
+    pickups: Query<(Entity, &Experience), With<Pickup>>,
+) {
+    for event in collision_events.iter() {
+        if let Ok((pickup, pickup_exp)) = pickups.get(event.obstacle) {
+            if let Ok(mut player_exp) = player.get_mut(event.collider) {
+                player_exp.amount += pickup_exp.amount;
+                death_events.send(DeathEvent { entity: pickup });
+            }
+        }
+    }
+}
+
 fn handle_exp_drop_on_death(
     mut commands: Commands,
     mut death_events: EventReader<DeathEvent>,
@@ -385,9 +413,9 @@ fn handle_exp_drop_on_death(
 ) {
     let mut handled: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     for event in death_events.iter() {
-        if let Ok((_, transform)) = query.get(event.entity) {
+        if let Ok((drop_exp, transform)) = query.get(event.entity) {
             if !handled.contains(&event.entity) {
-                spawn_exp_drop(&mut commands, transform.translation);
+                spawn_exp_drop(&mut commands, transform.translation, drop_exp.amount);
                 handled.insert(event.entity);
             }
         }
@@ -480,6 +508,7 @@ impl Plugin for GamePlugin {
         .add_system(check_collisions.after(move_things))
         .add_system(collision_damage.after(check_collisions))
         .add_system(bullet_collision.after(check_collisions))
+        .add_system(exp_pickup_collision.after(check_collisions))
         .add_system_to_stage(CLEANUP, handle_death)
         .add_system_to_stage(CLEANUP, handle_exp_drop_on_death.before(handle_death))
         .add_system(spawn_new_enemies)
