@@ -294,13 +294,6 @@ fn setup(mut commands: Commands) {
             speed: 200.0,
             lifetime: std::time::Duration::from_secs(1),
         })
-        .insert(ShootBouncer {
-            cooldown: Timer::new(std::time::Duration::from_millis(600), true),
-            damage: 1,
-            size: 5.0,
-            speed: 500.0,
-            lifetime: std::time::Duration::from_secs(4),
-        })
         .insert(InvincibilityWindow {
             damage_sources: HashMap::new(),
         })
@@ -333,6 +326,23 @@ fn handle_input(
         }
 
         velocity.direction = velocity.direction.normalize_or_zero();
+    }
+}
+
+fn upgrade_player_bouncer(
+    mut commands: Commands,
+    players: Query<(Entity, &Experience), (With<Player>, Without<ShootBouncer>)>,
+) {
+    for (entity, experience) in players.iter() {
+        if experience.amount > 100 {
+            commands.entity(entity).insert(ShootBouncer {
+                cooldown: Timer::new(std::time::Duration::from_millis(600), true),
+                damage: 1,
+                size: 5.0,
+                speed: 500.0,
+                lifetime: std::time::Duration::from_secs(4),
+            });
+        }
     }
 }
 
@@ -760,6 +770,7 @@ impl Plugin for GamePlugin {
         .add_system(handle_health_change)
         .add_system(enemy_ai)
         .add_system(check_lifetimes)
+        .add_system(upgrade_player_bouncer)
         .add_system(precheck_collisions.after(enemy_ai))
         .add_system(move_things.after(precheck_collisions))
         .add_system(handle_input.before(move_things))
