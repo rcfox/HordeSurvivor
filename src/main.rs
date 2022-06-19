@@ -74,12 +74,35 @@ struct Damage {
 }
 
 #[derive(Component)]
+struct Lifetime {
+    timer: Timer,
+}
+
+#[derive(Component)]
+struct Punchthrough {
+    amount: u32,
+}
+
+#[derive(Component)]
 struct ShootBullet {
     cooldown: Timer,
     damage: u32,
     size: f32,
     speed: f32,
+    lifetime: std::time::Duration,
 }
+
+#[derive(Component)]
+struct ShootBouncer {
+    cooldown: Timer,
+    damage: u32,
+    size: f32,
+    speed: f32,
+    lifetime: std::time::Duration,
+}
+
+#[derive(Component)]
+struct BounceOnEdgeOfScreen;
 
 #[derive(Component)]
 struct Bullet;
@@ -103,6 +126,8 @@ struct BulletBundle {
     speed: Velocity,
     damage: Damage,
     owner: Owner,
+    lifetime: Lifetime,
+    punchthrough: Punchthrough,
 
     #[bundle]
     sprite: SpriteBundle,
@@ -267,6 +292,14 @@ fn setup(mut commands: Commands) {
             damage: 1,
             size: 3.0,
             speed: 200.0,
+            lifetime: std::time::Duration::from_secs(1),
+        })
+        .insert(ShootBouncer {
+            cooldown: Timer::new(std::time::Duration::from_millis(600), true),
+            damage: 1,
+            size: 5.0,
+            speed: 500.0,
+            lifetime: std::time::Duration::from_secs(4),
         })
         .insert(InvincibilityWindow {
             damage_sources: HashMap::new(),
@@ -462,13 +495,48 @@ fn collision_damage(
 fn bullet_collision(
     mut collision_events: EventReader<CollisionEvent>,
     mut death_events: EventWriter<DeathEvent>,
-    bullets: Query<Entity, With<Bullet>>,
+    mut bullets: Query<(Entity, &mut Punchthrough), With<Bullet>>,
     obstacles: Query<Entity, (With<Solid>, Without<Bullet>, Without<Player>)>,
 ) {
     for event in collision_events.iter() {
-        if let Ok(entity) = bullets.get(event.collider) {
+        if let Ok((entity, mut punchthrough)) = bullets.get_mut(event.collider) {
+            if punchthrough.amount == 0 {
+                continue;
+            }
             if obstacles.get(event.obstacle).is_ok() {
-                death_events.send(DeathEvent { entity });
+                punchthrough.amount -= 1;
+                if punchthrough.amount == 0 {
+                    death_events.send(DeathEvent { entity });
+                }
+            }
+        }
+    }
+}
+
+fn bouncer_bounce_on_window(
+    images: Res<Assets<bevy::prelude::Image>>,
+    windows: Res<Windows>,
+    mut bouncers: Query<(&mut Velocity, &Transform), With<BounceOnEdgeOfScreen>>,
+    cameras: Query<(&Camera, &GlobalTransform)>,
+) {
+    if let Some((camera, camera_transform)) = cameras.iter().next() {
+        for (mut bouncer_velocity, bouncer_transform) in bouncers.iter_mut() {
+            let trans = bouncer_transform.translation;
+            if let Some(screen_coords) =
+                camera.world_to_screen(&windows, &images, camera_transform, trans)
+            {
+                if screen_coords.x < -windows.primary().width() / 2.0 {
+                    bouncer_velocity.direction.x *= -1.0;
+                }
+                if screen_coords.x > windows.primary().width() / 2.0 {
+                    bouncer_velocity.direction.x *= -1.0;
+                }
+                if screen_coords.y < -windows.primary().height() / 2.0 {
+                    bouncer_velocity.direction.y *= -1.0;
+                }
+                if screen_coords.y > windows.primary().height() / 2.0 {
+                    bouncer_velocity.direction.y *= -1.0;
+                }
             }
         }
     }
@@ -596,10 +664,76 @@ fn shoot_bullet(
                         },
                         ..default()
                     },
+                    lifetime: Lifetime {
+                        timer: Timer::new(shoot.lifetime, false),
+                    },
+                    punchthrough: Punchthrough { amount: 1 },
                     bullet: Bullet,
                     owner: Owner(Some(owner)),
                 });
             }
+        }
+    }
+}
+
+fn shoot_bouncer(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut ShootBouncer, &Transform)>,
+) {
+    let mut rng = rand::thread_rng();
+    let dt = time.delta();
+    for (owner, mut shoot, transform) in query.iter_mut() {
+        shoot.cooldown.tick(dt);
+
+        if shoot.cooldown.finished() {
+            let direction = Vec3::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0), 0.0)
+                .normalize_or_zero();
+
+            commands
+                .spawn_bundle(BulletBundle {
+                    damage: Damage {
+                        damage: shoot.damage,
+                    },
+                    speed: Velocity {
+                        speed: shoot.speed,
+                        direction,
+                    },
+                    sprite: SpriteBundle {
+                        sprite: Sprite {
+                            color: BULLET_COLOR,
+                            ..default()
+                        },
+                        transform: Transform {
+                            scale: Vec3::new(shoot.size, shoot.size, 1.0),
+                            translation: transform.translation,
+                            ..default()
+                        },
+                        ..default()
+                    },
+                    lifetime: Lifetime {
+                        timer: Timer::new(shoot.lifetime, false),
+                    },
+                    punchthrough: Punchthrough {
+                        amount: u32::max_value(),
+                    },
+                    bullet: Bullet,
+                    owner: Owner(Some(owner)),
+                })
+                .insert(BounceOnEdgeOfScreen);
+        }
+    }
+}
+
+fn check_lifetimes(
+    time: Res<Time>,
+    mut events: EventWriter<DeathEvent>,
+    mut lifetimes: Query<(Entity, &mut Lifetime)>,
+) {
+    for (entity, mut lifetime) in lifetimes.iter_mut() {
+        lifetime.timer.tick(time.delta());
+        if lifetime.timer.finished() {
+            events.send(DeathEvent { entity });
         }
     }
 }
@@ -625,10 +759,13 @@ impl Plugin for GamePlugin {
         .add_startup_system(setup_health_display)
         .add_system(handle_health_change)
         .add_system(enemy_ai)
+        .add_system(check_lifetimes)
         .add_system(precheck_collisions.after(enemy_ai))
         .add_system(move_things.after(precheck_collisions))
         .add_system(handle_input.before(move_things))
         .add_system(shoot_bullet.before(move_things))
+        .add_system(shoot_bouncer.before(move_things))
+        .add_system(bouncer_bounce_on_window)
         .add_system(check_collisions.after(move_things))
         .add_system(collision_damage.after(check_collisions))
         .add_system(bullet_collision.after(check_collisions))
