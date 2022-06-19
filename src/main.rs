@@ -32,7 +32,12 @@ struct EnemySpawnConfig {
     desired_amount: usize,
 }
 
-// Player component
+#[derive(Component)]
+struct Owner(Option<Entity>);
+
+#[derive(Component)]
+struct Name(String);
+
 #[derive(Component)]
 struct Player;
 
@@ -55,7 +60,10 @@ struct Health {
 }
 
 #[derive(Component)]
-struct Damage(u32);
+struct Damage {
+    damage: u32,
+    cooldown: Timer,
+}
 
 #[derive(Component)]
 struct ShootBullet {
@@ -73,6 +81,7 @@ struct BulletBundle {
     bullet: Bullet,
     speed: Velocity,
     damage: Damage,
+    owner: Owner,
 
     #[bundle]
     sprite: SpriteBundle,
@@ -98,12 +107,18 @@ fn spawn_enemies(mut commands: Commands, num: usize) {
                 },
                 ..default()
             })
+            .insert(Name(String::from("Enemy")))
             .insert(Health { max: 1, current: 1 })
+            .insert(Damage {
+                damage: 1,
+                cooldown: Timer::new(std::time::Duration::from_millis(1000), true),
+            })
             .insert(Velocity {
                 speed: 60.0,
                 direction: Vec3::ZERO,
             })
             .insert(PreventOverlap)
+            .insert(Owner(None))
             .insert(Enemy);
     }
 }
@@ -143,6 +158,11 @@ fn setup(mut commands: Commands) {
                 ..default()
             },
             ..default()
+        })
+        .insert(Name(String::from("Player")))
+        .insert(Health {
+            max: 100,
+            current: 100,
         })
         .insert(Velocity {
             speed: 80.0,
@@ -291,15 +311,31 @@ fn check_collisions(
 }
 
 fn collision_damage(
+    time: Res<Time>,
     mut collision_events: EventReader<CollisionEvent>,
     mut death_events: EventWriter<DeathEvent>,
-    damagers: Query<&Damage>,
-    mut damagees: Query<(Entity, &mut Health)>,
+    mut damagers: Query<(&mut Damage, &Owner)>,
+    mut damagees: Query<(Entity, &mut Health, &Name)>,
 ) {
     for event in collision_events.iter() {
-        if let Ok(damage) = damagers.get(event.collider) {
-            if let Ok((entity, mut health)) = damagees.get_mut(event.obstacle) {
-                health.current -= damage.0;
+        if let Ok((mut damage, owner)) = damagers.get_mut(event.collider) {
+            if let Ok((entity, mut health, name)) = damagees.get_mut(event.obstacle) {
+                if owner.0 == Some(entity) {
+                    continue;
+                }
+                damage.cooldown.tick(time.delta());
+                if !damage.cooldown.finished() {
+                    continue;
+                }
+                if health.current > damage.damage {
+                    health.current -= damage.damage;
+                } else {
+                    health.current = 0;
+                }
+                if health.current > health.max {
+                    health.current = health.max;
+                }
+                println!("{} health: {}", name.0, health.current);
                 if health.current == 0 {
                     death_events.send(DeathEvent { entity });
                 }
@@ -336,11 +372,11 @@ fn handle_death(mut death_events: EventReader<DeathEvent>, mut commands: Command
 fn shoot_bullet(
     mut commands: Commands,
     time: Res<Time>,
-    mut query: Query<(&mut ShootBullet, &Transform)>,
+    mut query: Query<(Entity, &mut ShootBullet, &Transform)>,
     targets: Query<&Transform, With<Enemy>>,
 ) {
     let dt = time.delta();
-    for (mut shoot, transform) in query.iter_mut() {
+    for (owner, mut shoot, transform) in query.iter_mut() {
         shoot.cooldown.tick(dt);
 
         if shoot.cooldown.finished() {
@@ -356,7 +392,10 @@ fn shoot_bullet(
             if let Some(target) = target {
                 let direction = (target.1.translation - transform.translation).normalize_or_zero();
                 commands.spawn_bundle(BulletBundle {
-                    damage: Damage(shoot.damage),
+                    damage: Damage {
+                        damage: shoot.damage,
+                        cooldown: Timer::new(std::time::Duration::from_millis(1000), true),
+                    },
                     speed: Velocity {
                         speed: shoot.speed,
                         direction,
@@ -374,6 +413,7 @@ fn shoot_bullet(
                         ..default()
                     },
                     bullet: Bullet,
+                    owner: Owner(Some(owner)),
                 });
             }
         }
